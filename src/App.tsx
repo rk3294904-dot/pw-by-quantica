@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { lazy, Suspense, useCallback } from 'react';
 import { Send, GraduationCap } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Breadcrumbs } from '@/components/Breadcrumbs';
@@ -6,13 +6,17 @@ import { BatchesView } from '@/components/BatchesView';
 import { SubjectsView } from '@/components/SubjectsView';
 import { ChaptersView } from '@/components/ChaptersView';
 import { ContentView } from '@/components/ContentView';
-import { VideoPlayer } from '@/components/VideoPlayer';
+import { LoadingSpinner } from '@/components/States';
 import { useNavigation, useAsync } from '@/hooks/useNavigation';
 import {
   fetchBatches,
   fetchBatchDetails,
   fetchChapters,
 } from '@/services/api';
+
+const VideoPlayer = lazy(() =>
+  import('@/components/VideoPlayer').then((module) => ({ default: module.VideoPlayer }))
+);
 
 function App() {
   const {
@@ -81,13 +85,15 @@ function App() {
   // Video page is fullscreen — render outside the main layout
   if (isVideoPage && state.playingLecture && state.batchId && state.subjectId) {
     return (
-      <VideoPlayer
-        batchId={state.batchId}
-        lectureId={state.playingLecture.data._id}
-        subjectId={state.subjectId}
-        title={state.playingLecture.data.topic}
-        onBack={closeVideo}
-      />
+      <Suspense fallback={<LoadingSpinner message="Loading video player..." />}>
+        <VideoPlayer
+          batchId={state.batchId}
+          lectureId={state.playingLecture.data._id}
+          subjectId={state.subjectId}
+          title={state.playingLecture.data.topic}
+          onBack={closeVideo}
+        />
+      </Suspense>
     );
   }
 

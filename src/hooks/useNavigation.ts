@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import type { Lecture } from '@/types';
+import type { Lecture, LectureProgress } from '@/types';
 
 interface NavigationState {
   view: 'batches' | 'subjects' | 'chapters' | 'content' | 'video';
@@ -9,7 +9,7 @@ interface NavigationState {
   subjectName: string | null;
   chapterId: string | null;
   chapterName: string | null;
-  playingLecture: Lecture | null;
+  playingLecture: { data: Pick<Lecture['data'], '_id' | 'topic'> } | null;
 }
 
 const initial: NavigationState = {
@@ -66,6 +66,15 @@ export function useNavigation() {
     }));
   }, []);
 
+  const resumeLecture = useCallback((progress: LectureProgress) => {
+    setState({
+      view: 'video', batchId: progress.batchId, batchName: progress.batchName,
+      subjectId: progress.subjectId, subjectName: progress.subjectName,
+      chapterId: progress.chapterId, chapterName: progress.chapterName,
+      playingLecture: { data: { _id: progress.lectureId, topic: progress.title } },
+    });
+  }, []);
+
   const goBack = useCallback(() => {
     setState((prev) => {
       if (prev.view === 'video') {
@@ -94,6 +103,7 @@ export function useNavigation() {
     selectSubject,
     selectChapter,
     playLecture,
+    resumeLecture,
     closeVideo,
     goBack,
     goHome,

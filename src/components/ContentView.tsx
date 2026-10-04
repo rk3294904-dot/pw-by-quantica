@@ -9,7 +9,7 @@ import {
   ClipboardList,
   ChevronRight,
 } from 'lucide-react';
-import type { Lecture, Homework } from '@/types';
+import type { Lecture, Homework, LectureProgress } from '@/types';
 import { fetchLectures } from '@/services/api';
 import { LoadingSpinner, ErrorState, EmptyState } from '@/components/States';
 
@@ -21,6 +21,7 @@ interface Props {
   chapterId: string;
   chapterName: string;
   onPlay: (lecture: Lecture) => void;
+  progress: LectureProgress[];
 }
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode; contentType: string }[] = [
@@ -30,7 +31,7 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode; contentType: st
   { key: 'dpp_videos', label: 'DPP Videos', icon: <ClipboardList className="h-4 w-4" />, contentType: 'LECTURES' },
 ];
 
-export function ContentView({ batchId, subjectId, chapterId, chapterName, onPlay }: Props) {
+export function ContentView({ batchId, subjectId, chapterId, chapterName, onPlay, progress }: Props) {
   const [activeTab, setActiveTab] = useState<TabKey>('videos');
   const [lectures, setLectures] = useState<Lecture[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,6 +41,9 @@ export function ContentView({ batchId, subjectId, chapterId, chapterName, onPlay
   const [loadingMore, setLoadingMore] = useState(false);
 
   const tab = TABS.find((t) => t.key === activeTab)!;
+  const savedProgress = useMemo(() => new Map(progress
+    .filter((entry) => entry.batchId === batchId && entry.subjectId === subjectId)
+    .map((entry) => [entry.lectureId, entry])), [progress, batchId, subjectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +133,7 @@ export function ContentView({ batchId, subjectId, chapterId, chapterName, onPlay
               lecture={lecture}
               tabKey={activeTab}
               onPlay={() => onPlay(lecture)}
+              progress={savedProgress.get(lecture.data._id)}
             />
           ))}
 
@@ -185,10 +190,12 @@ function ContentRow({
   lecture,
   tabKey,
   onPlay,
+  progress,
 }: {
   lecture: Lecture;
   tabKey: TabKey;
   onPlay: () => void;
+  progress?: LectureProgress;
 }) {
   const data = lecture.data;
   const isVideo = tabKey === 'videos' || tabKey === 'dpp_videos';
@@ -239,11 +246,16 @@ function ContentRow({
                 {data.status}
               </span>
             )}
+            {progress && (
+              <span className={`rounded px-1.5 py-0.5 ${progress.completed ? 'bg-emerald-500/10 text-emerald-300' : 'bg-cyan-500/10 text-cyan-300'}`}>
+                {progress.completed ? 'You completed this' : `Watched ${Math.floor(progress.position / 60)} min`}
+              </span>
+            )}
           </div>
         </div>
 
         <div className="flex-shrink-0 rounded-lg bg-blue-500/10 px-2.5 py-2 text-xs font-medium text-blue-400 transition group-hover:bg-blue-500/20 sm:px-3">
-          Play
+          {progress?.completed ? 'Replay' : progress && progress.position > 0 ? 'Resume' : 'Play'}
         </div>
       </button>
     );

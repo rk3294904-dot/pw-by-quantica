@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { Search, BookOpen, X, ChevronDown } from 'lucide-react';
+import { Search, GraduationCap, X, ChevronDown, Star } from 'lucide-react';
 import type { Batch } from '@/types';
 import { LoadingSpinner, ErrorState, EmptyState } from '@/components/States';
 
@@ -9,28 +9,35 @@ interface Props {
   error: string | null;
   onSelect: (id: string, name: string) => void;
   onRetry: () => void;
+  favorites: string[];
+  libraryReady: boolean;
+  pendingFavorites: string[];
+  onFavorite: (id: string, saved: boolean) => void;
 }
 
 const PAGE_SIZE = 24;
 
-export function BatchesView({ batches, loading, error, onSelect, onRetry }: Props) {
+export function BatchesView({ batches, loading, error, onSelect, onRetry, favorites, libraryReady, pendingFavorites, onFavorite }: Props) {
   const [query, setQuery] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return batches;
-    const q = query.toLowerCase();
-    return batches.filter(
-      (b) =>
-        b.name.toLowerCase().includes(q) ||
-        (b.byName || '').toLowerCase().includes(q)
-    );
-  }, [batches, query]);
+    const searchQuery = query.trim().toLowerCase();
+    return batches.filter((batch) => {
+      if (favoritesOnly && !favoriteIds.has(batch._id)) return false;
+      return (
+        batch.name.toLowerCase().includes(searchQuery) ||
+        (batch.byName || '').toLowerCase().includes(searchQuery)
+      );
+    });
+  }, [batches, query, favoritesOnly, favoriteIds]);
 
   // Reset visible count when search changes
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query]);
+  }, [query, favoritesOnly]);
 
   const visible = filtered.slice(0, visibleCount);
   const hasMore = visibleCount < filtered.length;
@@ -50,6 +57,20 @@ export function BatchesView({ batches, loading, error, onSelect, onRetry }: Prop
         <p className="mt-1.5 text-sm text-slate-400">
           {batches.length} batches available — find your course and start learning
         </p>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {[false, true].map((onlyFavorites) => (
+          <button type="button" key={String(onlyFavorites)} aria-pressed={favoritesOnly === onlyFavorites}
+            onClick={() => setFavoritesOnly(onlyFavorites)}
+            disabled={onlyFavorites && !libraryReady}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition disabled:opacity-50 ${favoritesOnly === onlyFavorites
+              ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:text-white'}`}>
+            {onlyFavorites && <Star className="h-4 w-4" />}
+            {onlyFavorites ? `Favorites (${favorites.length})` : 'All batches'}
+          </button>
+        ))}
+        <p className="text-xs text-slate-500 sm:ml-auto">Favorites and progress are saved for this browser.</p>
       </div>
 
       <div className="relative mb-6">
@@ -75,13 +96,18 @@ export function BatchesView({ batches, loading, error, onSelect, onRetry }: Prop
         <EmptyState
           icon={<Search className="h-12 w-12" />}
           title="No batches found"
-          message={`No batches match "${query}". Try a different search term.`}
+          message={favoritesOnly && !query.trim()
+            ? 'Tap the star on a batch to save it here.'
+            : `No batches match "${query}". Try a different search term.`}
         />
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {visible.map((batch) => (
-              <BatchCard key={batch._id} batch={batch} onSelect={onSelect} />
+              <BatchCard key={batch._id} batch={batch} onSelect={onSelect}
+                favorite={favoriteIds.has(batch._id)}
+                favoriteDisabled={!libraryReady || pendingFavorites.includes(batch._id)}
+                onFavorite={onFavorite} />
             ))}
           </div>
 
@@ -108,27 +134,34 @@ export function BatchesView({ batches, loading, error, onSelect, onRetry }: Prop
 function BatchCard({
   batch,
   onSelect,
+  favorite,
+  favoriteDisabled,
+  onFavorite,
 }: {
   batch: Batch;
   onSelect: (id: string, name: string) => void;
+  favorite: boolean;
+  favoriteDisabled: boolean;
+  onFavorite: (id: string, saved: boolean) => void;
 }) {
+  const previewImage = batch.previewImage?.trim();
+
   return (
+    <div className="relative flex">
     <button
       onClick={() => onSelect(batch._id, batch.name)}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/30 text-left transition-all duration-300 hover:border-blue-500/50 hover:bg-slate-800/60 hover:shadow-lg hover:shadow-blue-500/10 active:scale-[0.98]"
+      className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/30 text-left transition-all duration-300 hover:border-blue-500/50 hover:bg-slate-800/60 hover:shadow-lg hover:shadow-blue-500/10 active:scale-[0.98]"
     >
       <div className="relative aspect-[16/9] overflow-hidden bg-slate-800">
-        {batch.previewImage ? (
+        {previewImage ? (
           <img
-            src={batch.previewImage}
+            src={previewImage}
             alt={batch.name}
             loading="lazy"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-700 to-slate-800">
-            <BookOpen className="h-10 w-10 text-slate-600" />
-          </div>
+          <GeneratedThumbnail batch={batch} />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-transparent to-transparent" />
         <span className="absolute top-3 left-3 rounded-full bg-slate-900/80 px-2.5 py-1 text-xs font-medium text-slate-200 backdrop-blur-sm">
@@ -151,5 +184,40 @@ function BatchCard({
         </div>
       </div>
     </button>
+    <button type="button" onClick={() => onFavorite(batch._id, !favorite)} disabled={favoriteDisabled}
+      aria-label={`${favorite ? 'Remove' : 'Save'} ${batch.name} ${favorite ? 'from' : 'to'} favorites`}
+      aria-pressed={favorite}
+      className={`absolute right-3 top-3 z-20 rounded-full border border-slate-600/50 bg-slate-900/90 p-2 transition hover:border-amber-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 disabled:opacity-40 ${favorite ? 'text-amber-300' : 'text-slate-300'}`}>
+      <Star className="h-4 w-4" fill={favorite ? 'currentColor' : 'none'} />
+    </button>
+    </div>
+  );
+}
+
+function GeneratedThumbnail({ batch }: { batch: Batch }) {
+  const hue = Array.from(batch._id).reduce(
+    (total, character) => (total * 31 + character.charCodeAt(0)) % 360,
+    0
+  );
+
+  return (
+    <div
+      role="img"
+      aria-label={`Quantica Digital generated thumbnail for ${batch.name}`}
+      className="relative flex h-full w-full flex-col justify-end overflow-hidden px-5 pb-5 pt-12"
+      style={{ background: `linear-gradient(125deg, hsl(${hue} 42% 24%), #0f172a 85%)` }}
+    >
+      <div aria-hidden="true" className="absolute -right-8 -top-10 h-44 w-44 rounded-full border border-white/10" />
+      <div aria-hidden="true" className="absolute -right-1 -top-3 h-28 w-28 rounded-full border border-white/10" />
+      <GraduationCap aria-hidden="true" className="absolute right-5 top-16 h-8 w-8 text-white/40" />
+      <div className="relative z-10">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-200">
+          Quantica Digital
+        </p>
+        <p className="mt-2 line-clamp-2 text-lg font-bold leading-snug text-white">
+          {batch.name}
+        </p>
+      </div>
+    </div>
   );
 }

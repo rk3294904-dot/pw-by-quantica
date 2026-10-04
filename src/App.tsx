@@ -8,6 +8,8 @@ import { ChaptersView } from '@/components/ChaptersView';
 import { ContentView } from '@/components/ContentView';
 import { LoadingSpinner } from '@/components/States';
 import { useNavigation, useAsync } from '@/hooks/useNavigation';
+import { useLibrary } from '@/hooks/useLibrary';
+import { LearningLibrary } from '@/components/LearningLibrary';
 import {
   fetchBatches,
   fetchBatchDetails,
@@ -25,10 +27,12 @@ function App() {
     selectSubject,
     selectChapter,
     playLecture,
+    resumeLecture,
     closeVideo,
     goBack,
     goHome,
   } = useNavigation();
+  const library = useLibrary();
 
   const isVideoPage = state.view === 'video';
 
@@ -84,14 +88,29 @@ function App() {
 
   // Video page is fullscreen — render outside the main layout
   if (isVideoPage && state.playingLecture && state.batchId && state.subjectId) {
+    if (library.loading) return <LoadingSpinner message="Loading saved lecture progress..." />;
+    const savedProgress = library.progress.find((entry) => entry.batchId === state.batchId
+      && entry.subjectId === state.subjectId && entry.lectureId === state.playingLecture?.data._id);
     return (
       <Suspense fallback={<LoadingSpinner message="Loading video player..." />}>
         <VideoPlayer
+          key={`${state.batchId}:${state.subjectId}:${state.playingLecture.data._id}`}
           batchId={state.batchId}
           lectureId={state.playingLecture.data._id}
           subjectId={state.subjectId}
           title={state.playingLecture.data.topic}
           onBack={closeVideo}
+          initialPosition={savedProgress?.completed ? 0 : savedProgress?.position ?? 0}
+          initiallyCompleted={savedProgress?.completed ?? false}
+          saveEnabled={library.ready}
+          saveError={library.error}
+          onProgress={(position, duration, completed) => library.saveProgress({
+            batchId: state.batchId!, batchName: state.batchName || 'Study batch',
+            subjectId: state.subjectId!, subjectName: state.subjectName || 'Subject',
+            chapterId: state.chapterId!, chapterName: state.chapterName || 'Chapter',
+            lectureId: state.playingLecture!.data._id, title: state.playingLecture!.data.topic,
+            position, duration, completed,
+          })}
         />
       </Suspense>
     );
@@ -102,16 +121,31 @@ function App() {
       <Header onHome={goHome} />
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
+        {library.error && (
+          <div role="alert" className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+            <p>{library.error}</p>
+            <button type="button" onClick={library.retryLoad} disabled={library.loading}
+              className="rounded-lg px-3 py-2 font-medium hover:bg-amber-500/10 disabled:opacity-50">Retry</button>
+          </div>
+        )}
         {state.view !== 'batches' && <Breadcrumbs items={breadcrumbItems} />}
 
         {state.view === 'batches' && (
+          <>
+          {library.loading && <p role="status" className="mb-4 text-sm text-slate-400">Loading your favorites and progress...</p>}
+          <LearningLibrary progress={library.progress} onResume={resumeLecture} />
           <BatchesView
             batches={batchesQuery.data?.batches ?? []}
             loading={batchesQuery.loading}
             error={batchesQuery.error}
             onSelect={selectBatch}
             onRetry={retryBatches}
+            favorites={library.favorites}
+            pendingFavorites={library.pendingFavorites}
+            libraryReady={library.ready}
+            onFavorite={library.toggleFavorite}
           />
+          </>
         )}
 
         {state.view === 'subjects' && (
@@ -142,6 +176,7 @@ function App() {
             chapterId={state.chapterId}
             chapterName={state.chapterName ?? ''}
             onPlay={playLecture}
+            progress={library.progress}
           />
         )}
       </main>

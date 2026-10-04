@@ -150,3 +150,23 @@ export interface VideoApiResponse {
   url: string;
   keys: Record<string, string>;
 }
+
+export interface LectureProgress {
+  batchId: string;
+  batchName: string;
+  subjectId: string;
+  subjectName: string;
+  chapterId: string;
+  chapterName: string;
+  lectureId: string;
+  title: string;
+  position: number;
+  duration: number;
+  completed: boolean;
+  updatedAt: string;
+}
+
+export interface Library {
+  favorites: string[];
+  progress: LectureProgress[];
+}

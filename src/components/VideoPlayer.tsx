@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  X,
   Loader2,
   AlertCircle,
   Play,
@@ -13,6 +12,7 @@ import {
   RotateCw,
   Settings,
   ArrowLeft,
+  CheckCircle2,
 } from 'lucide-react';
 import { MediaPlayer } from 'dashjs';
 import type { MediaPlayerClass } from 'dashjs';
@@ -26,6 +26,11 @@ interface Props {
   subjectId: string;
   title: string;
   onBack: () => void;
+  initialPosition: number;
+  initiallyCompleted: boolean;
+  saveEnabled: boolean;
+  saveError: string | null;
+  onProgress: (position: number, duration: number, completed: boolean) => void;
 }
 
 function hexToBase64Url(hex: string): string {
@@ -55,12 +60,18 @@ export function VideoPlayer({
   subjectId,
   title,
   onBack,
+  initialPosition,
+  initiallyCompleted,
+  saveEnabled,
+  saveError,
+  onProgress,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<MediaPlayerClass | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -72,6 +83,68 @@ export function VideoPlayer({
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [speed, setSpeed] = useState(1);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [completed, setCompleted] = useState(initiallyCompleted);
+  const completedRef = useRef(initiallyCompleted);
+  const progressCallbackRef = useRef(onProgress);
+  const resumePositionRef = useRef(initialPosition);
+
+  useEffect(() => {
+    progressCallbackRef.current = onProgress;
+  }, [onProgress]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !saveEnabled) return;
+    let restored = resumePositionRef.current <= 0;
+    let hasPlayed = false;
+    let lastSaved = Date.now();
+
+    const restorePosition = () => {
+      if (restored || !Number.isFinite(video.duration) || video.duration <= 0) return;
+      video.currentTime = Math.min(resumePositionRef.current, Math.max(0, video.duration - 1));
+      setCurrentTime(video.currentTime);
+      restored = true;
+    };
+    const save = () => {
+      if (!hasPlayed || !restored || !Number.isFinite(video.duration) || video.duration <= 0) return;
+      lastSaved = Date.now();
+      progressCallbackRef.current(video.currentTime, video.duration, completedRef.current);
+    };
+    const onPlaying = () => { hasPlayed = true; restorePosition(); };
+    const onTimeUpdate = () => {
+      restorePosition();
+      if (!video.paused && Date.now() - lastSaved >= 15000) save();
+    };
+    const onEnded = () => {
+      completedRef.current = true;
+      setCompleted(true);
+      save();
+    };
+    const onVisibility = () => { if (document.visibilityState === 'hidden') save(); };
+    video.addEventListener('loadedmetadata', restorePosition);
+    video.addEventListener('loadeddata', restorePosition);
+    video.addEventListener('playing', onPlaying);
+    video.addEventListener('timeupdate', onTimeUpdate);
+    video.addEventListener('pause', save);
+    video.addEventListener('ended', onEnded);
+    window.addEventListener('pagehide', save);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      save();
+      video.removeEventListener('loadedmetadata', restorePosition);
+      video.removeEventListener('loadeddata', restorePosition);
+      video.removeEventListener('playing', onPlaying);
+      video.removeEventListener('timeupdate', onTimeUpdate);
+      video.removeEventListener('pause', save);
+      video.removeEventListener('ended', onEnded);
+      window.removeEventListener('pagehide', save);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [saveEnabled, batchId, lectureId, subjectId]);
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+  }, []);
 
   const showControlsTemporarily = useCallback(() => {
     setShowControls(true);
@@ -85,13 +158,20 @@ export function VideoPlayer({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    let loadingTimer: ReturnType<typeof setTimeout> | undefined;
+    setLoading(true);
+    setError(null);
+    setPlaying(false);
+    playingRef.current = false;
 
     async function init() {
       try {
         const res: VideoApiResponse = await fetchVideo(
           batchId,
           lectureId,
-          subjectId
+          subjectId,
+          controller.signal
         );
         if (cancelled) return;
 
@@ -116,8 +196,12 @@ export function VideoPlayer({
 
         const player = MediaPlayer().create();
         playerRef.current = player;
+        player.updateSettings({
+          debug: { logLevel: 0 },
+          streaming: { capabilities: { useMediaCapabilitiesApi: false } },
+        });
 
-        const keyEntries = Object.keys(res.keys);
+        const keyEntries = Object.keys(res.keys ?? {});
         if (keyEntries.length > 0) {
           const clearkeys: Record<string, string> = {};
           for (const kid of keyEntries) {
@@ -131,11 +215,17 @@ export function VideoPlayer({
         }
 
         if (signingParams) {
-          const signingQuery = signingParams.slice(1);
           const interceptor: RequestInterceptor = (request) => {
-            if (request.url && (request.url.includes('examcrushers.in') || request.url.includes('cloudfront.net'))) {
-              const sep = request.url.includes('?') ? '&' : '?';
-              request.url = request.url + sep + signingQuery;
+            if (request.url) {
+              const requestUrl = new URL(request.url, streamUrl);
+              const hostname = requestUrl.hostname;
+              if (requestUrl.origin === manifestUrlObj.origin || hostname === 'examcrushers.in'
+                || hostname.endsWith('.examcrushers.in') || hostname.endsWith('.cloudfront.net')) {
+                manifestUrlObj.searchParams.forEach((value, name) => {
+                  if (!requestUrl.searchParams.has(name)) requestUrl.searchParams.append(name, value);
+                });
+                request.url = requestUrl.href;
+              }
             }
             return Promise.resolve(request);
           };
@@ -144,8 +234,10 @@ export function VideoPlayer({
 
         player.on(MediaPlayer.events.ERROR, (e) => {
           if (cancelled) return;
-          const err = e as { error?: { message?: string } | string };
-          const msg = typeof err.error === 'string' ? err.error : err.error?.message || 'Video playback error';
+          const err = e as { error?: { code?: number; message?: string } | string };
+          const msg = typeof err.error === 'object' && err.error?.code === 32
+            ? 'No playable audio or video tracks were found. Retry to refresh the stream. If this continues, the lecture source or browser may not support this video.'
+            : 'Video playback failed. Retry to refresh the stream, or try another supported browser.';
           setError(msg);
           setLoading(false);
         });
@@ -195,14 +287,12 @@ export function VideoPlayer({
 
         player.initialize(video, streamUrl, true);
 
-        setTimeout(() => {
+        loadingTimer = setTimeout(() => {
           if (!cancelled) setLoading(false);
         }, 8000);
-      } catch (err) {
+      } catch {
         if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : 'Failed to load video'
-        );
+        setError('Unable to load this video. Please retry.');
         setLoading(false);
       }
     }
@@ -211,13 +301,14 @@ export function VideoPlayer({
 
     return () => {
       cancelled = true;
+      controller.abort();
+      if (loadingTimer) clearTimeout(loadingTimer);
       if (playerRef.current) {
         playerRef.current.reset();
         playerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchId, lectureId, subjectId]);
+  }, [batchId, lectureId, subjectId, retryAttempt]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -252,7 +343,6 @@ export function VideoPlayer({
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = '';
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fullscreen, onBack]);
 
   // Fullscreen change listener
@@ -341,7 +431,27 @@ export function VideoPlayer({
         <h3 className="flex-1 text-sm font-medium text-white line-clamp-1">
           {title}
         </h3>
+        <button type="button" disabled={!saveEnabled || loading || duration <= 0}
+          aria-pressed={completed}
+          onClick={() => {
+            const video = videoRef.current;
+            if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return;
+            const nextCompleted = !completedRef.current;
+            completedRef.current = nextCompleted;
+            setCompleted(nextCompleted);
+            progressCallbackRef.current(video.currentTime, video.duration, nextCompleted);
+          }}
+          className={`flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs transition hover:bg-white/10 disabled:opacity-40 ${completed ? 'text-emerald-300' : 'text-white'}`}>
+          <CheckCircle2 className="h-4 w-4" />
+          <span>{completed ? 'Completed' : 'Mark complete'}</span>
+        </button>
       </div>
+
+      {(saveError || !saveEnabled) && (
+        <div role="status" className="absolute left-4 right-4 top-16 z-40 rounded-lg bg-slate-900/95 px-3 py-2 text-xs text-amber-200">
+          {saveError || 'Progress saving is unavailable. Return to the catalog and retry loading your library.'}
+        </div>
+      )}
 
       {/* Video container */}
       <div
@@ -398,8 +508,14 @@ export function VideoPlayer({
               {error}
             </p>
             <button
-              onClick={onBack}
+              onClick={() => setRetryAttempt((current) => current + 1)}
               className="mt-6 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+            >
+              Retry Video
+            </button>
+            <button
+              onClick={onBack}
+              className="mt-3 rounded-lg px-4 py-2 text-sm font-medium text-slate-300 transition hover:bg-white/10"
             >
               Go Back
             </button>
